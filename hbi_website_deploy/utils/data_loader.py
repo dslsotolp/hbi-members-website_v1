@@ -1,0 +1,107 @@
+"""Cached data loading for the HBI Members website."""
+
+from pathlib import Path
+
+import pandas as pd
+import streamlit as st
+
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+
+
+@st.cache_data(ttl=3600)
+def load_members():
+    return pd.read_csv(DATA_DIR / "dim_members.csv")
+
+
+@st.cache_data(ttl=3600)
+def load_positions():
+    return pd.read_csv(DATA_DIR / "dim_positions.csv")
+
+
+@st.cache_data(ttl=3600)
+def load_research_areas():
+    return pd.read_csv(DATA_DIR / "dim_research_areas.csv")
+
+
+@st.cache_data(ttl=3600)
+def load_education():
+    return pd.read_csv(DATA_DIR / "dim_education.csv")
+
+
+@st.cache_data(ttl=3600)
+def load_publications():
+    return pd.read_csv(DATA_DIR / "dim_publications.csv")
+
+
+@st.cache_data(ttl=3600)
+def load_activities():
+    return pd.read_csv(DATA_DIR / "dim_activities.csv")
+
+
+@st.cache_data(ttl=3600)
+def load_contact_info():
+    return pd.read_csv(DATA_DIR / "dim_contact_info.csv")
+
+
+@st.cache_data(ttl=3600)
+def load_news():
+    return pd.read_csv(DATA_DIR / "dim_news.csv")
+
+
+@st.cache_data(ttl=3600)
+def build_directory_data():
+    """Pre-join members with primary position and research areas for the directory."""
+    members = load_members()
+    positions = load_positions()
+    research_areas = load_research_areas()
+
+    # Primary position per member (lowest sort_order)
+    pos_sorted = positions.sort_values(["member_id", "sort_order"])
+    primary_pos = (
+        pos_sorted.groupby("member_id")
+        .first()[["title", "department", "faculty"]]
+        .reset_index()
+    )
+
+    # Research areas as list per member
+    areas_by_member = (
+        research_areas.groupby("member_id")["area"]
+        .apply(lambda x: x.dropna().tolist())
+        .to_dict()
+    )
+
+    # HBI membership status (Full Member, Associate Member, etc. followed by HBI row)
+    _HBI_STATUSES = {
+        "Full Member", "Associate Member", "Affiliate Member",
+        "Emeritus Member", "Full Member and Chair", "Joint Member",
+        "Primary Member", "Principal Member",
+    }
+    hbi_rows = set(
+        zip(
+            positions[positions["title"] == "Hotchkiss Brain Institute"]["member_id"],
+            positions[positions["title"] == "Hotchkiss Brain Institute"]["sort_order"],
+        )
+    )
+    status_rows = positions[positions["title"].isin(_HBI_STATUSES)].copy()
+    status_rows["hbi_follows"] = [
+        (mid, so + 1) in hbi_rows
+        for mid, so in zip(status_rows["member_id"], status_rows["sort_order"])
+    ]
+    hbi_status = (
+        status_rows[status_rows["hbi_follows"]]
+        .sort_values("sort_order")
+        .drop_duplicates("member_id", keep="first")
+        .set_index("member_id")["title"]
+        .to_dict()
+    )
+
+    # Merge
+    directory = members.merge(primary_pos, on="member_id", how="left")
+    directory["research_areas_list"] = directory["member_id"].map(
+        lambda mid: areas_by_member.get(mid, [])
+    )
+    directory["hbi_membership"] = directory["member_id"].map(
+        lambda mid: hbi_status.get(mid, "")
+    )
+
+    return directory
